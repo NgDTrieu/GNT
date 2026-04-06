@@ -1,0 +1,11 @@
+torchvision
+ConfigArgParse
+imageio
+matplotlib
+numpy
+opencv_contrib_python
+Pillow
+scipy
+imageio-ffmpeg
+lpips
+scikit-image

@@ -205,7 +205,7 @@ def render_rays(
     single_net=True,
 ):
     """
-    :param ray_batch: {'ray_o': [N_rays, 3] , 'ray_d': [N_rays, 3], 'view_dir': [N_rays, 2]}
+    :param ray_batch: {'ray_o': [N_rays, 3] , 'ray_d': [N_rays, 3], 'view_dir': [N_rays, 2], 'src_transient_masks': optional}
     :param model:  {'net_coarse':  , 'net_fine': }
     :param N_samples: samples along each ray (for both coarse and fine model)
     :param inv_uniform: if True, uniformly sample inverse depth for coarse model
@@ -218,6 +218,9 @@ def render_rays(
 
     ret = {"outputs_coarse": None, "outputs_fine": None}
     ray_o, ray_d = ray_batch["ray_o"], ray_batch["ray_d"]
+    
+    # Extract transient masks for source views if available (scenario 2)
+    src_transient_masks = ray_batch.get("src_transient_masks", None)
 
     # pts: [N_rays, N_samples, 3]
     # z_vals: [N_rays, N_samples]
@@ -237,6 +240,7 @@ def render_rays(
         ray_batch["src_rgbs"],
         ray_batch["src_cameras"],
         featmaps=featmaps[0],
+        src_transient_masks=src_transient_masks,
     )  # [N_rays, N_samples, N_views, x]
     # TODO: include pixel mask in ray transformer
     # pixel_mask = (
@@ -265,6 +269,7 @@ def render_rays(
             ray_batch["src_rgbs"],
             ray_batch["src_cameras"],
             featmaps=featmaps[1],
+            src_transient_masks=src_transient_masks,
         )
 
         # TODO: Include pixel mask in ray transformer

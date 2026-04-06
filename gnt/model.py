@@ -2,6 +2,8 @@ import torch
 import os
 from gnt.transformer_network import GNT
 from gnt.feature_network import ResUNet
+from gnt.transient_encoder import TransientEncoder
+from gnt.visibility_mask_mlp import VisibilityMaskMLP
 
 
 def de_parallel(model):
@@ -44,9 +46,15 @@ class GNTModel(object):
             single_net=self.args.single_net,
         ).to(device)
 
+        # # create transient encoder and visibility mask MLP for handling in-the-wild data
+        # self.transient_encoder = TransientEncoder(latent_dim=128).to(device)
+        # self.visibility_mask_mlp = VisibilityMaskMLP(latent_dim=128, hidden_dim=128).to(device)
+
         # optimizer and learning rate scheduler
         learnable_params = list(self.net_coarse.parameters())
         learnable_params += list(self.feature_net.parameters())
+        # learnable_params += list(self.transient_encoder.parameters())
+        # learnable_params += list(self.visibility_mask_mlp.parameters())
         if self.net_fine is not None:
             learnable_params += list(self.net_fine.parameters())
 
@@ -56,6 +64,8 @@ class GNTModel(object):
                     {"params": self.net_coarse.parameters()},
                     {"params": self.net_fine.parameters()},
                     {"params": self.feature_net.parameters(), "lr": args.lrate_feature},
+                    # {"params": self.transient_encoder.parameters(), "lr": args.lrate_gnt},
+                    # {"params": self.visibility_mask_mlp.parameters(), "lr": args.lrate_gnt},
                 ],
                 lr=args.lrate_gnt,
             )
@@ -64,6 +74,8 @@ class GNTModel(object):
                 [
                     {"params": self.net_coarse.parameters()},
                     {"params": self.feature_net.parameters(), "lr": args.lrate_feature},
+                    # {"params": self.transient_encoder.parameters(), "lr": args.lrate_gnt},
+                    # {"params": self.visibility_mask_mlp.parameters(), "lr": args.lrate_gnt},
                 ],
                 lr=args.lrate_gnt,
             )
@@ -86,6 +98,14 @@ class GNTModel(object):
                 self.feature_net, device_ids=[args.local_rank], output_device=args.local_rank
             )
 
+            # self.transient_encoder = torch.nn.parallel.DistributedDataParallel(
+            #     self.transient_encoder, device_ids=[args.local_rank], output_device=args.local_rank
+            # )
+
+            # self.visibility_mask_mlp = torch.nn.parallel.DistributedDataParallel(
+            #     self.visibility_mask_mlp, device_ids=[args.local_rank], output_device=args.local_rank
+            # )
+
             if self.net_fine is not None:
                 self.net_fine = torch.nn.parallel.DistributedDataParallel(
                     self.net_fine, device_ids=[args.local_rank], output_device=args.local_rank
@@ -94,12 +114,16 @@ class GNTModel(object):
     def switch_to_eval(self):
         self.net_coarse.eval()
         self.feature_net.eval()
+        # self.transient_encoder.eval()
+        # self.visibility_mask_mlp.eval()
         if self.net_fine is not None:
             self.net_fine.eval()
 
     def switch_to_train(self):
         self.net_coarse.train()
         self.feature_net.train()
+        # self.transient_encoder.train()
+        # self.visibility_mask_mlp.train()
         if self.net_fine is not None:
             self.net_fine.train()
 

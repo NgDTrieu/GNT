@@ -38,7 +38,7 @@ def render_single_image(
     for i in range(0, N_rays, chunk_size):
         chunk = OrderedDict()
         for k in ray_batch:
-            if k in ["camera", "depth_range", "src_rgbs", "src_cameras"]:
+            if k in ["camera", "depth_range", "src_rgbs", "src_cameras", "src_transient_masks"]:
                 chunk[k] = ray_batch[k]
             elif ray_batch[k] is not None:
                 chunk[k] = ray_batch[k][i : i + chunk_size]

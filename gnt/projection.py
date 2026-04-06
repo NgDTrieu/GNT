@@ -81,13 +81,15 @@ class Projector:
         ray_diff = ray_diff.reshape((num_views,) + original_shape + (4,))
         return ray_diff
 
-    def compute(self, xyz, query_camera, train_imgs, train_cameras, featmaps):
+    def compute(self, xyz, query_camera, train_imgs, train_cameras, featmaps, src_transient_masks=None):
         """
         :param xyz: [n_rays, n_samples, 3]
         :param query_camera: [1, 34], 34 = img_size(2) + intrinsics(16) + extrinsics(16)
         :param train_imgs: [1, n_views, h, w, 3]
         :param train_cameras: [1, n_views, 34]
         :param featmaps: [n_views, d, h, w]
+        :param src_transient_masks: [n_views, h*w] optional mask for transient regions in source views
+                                   1.0 = static (keep), 0.0 = transient (mask out)
         :return: rgb_feat_sampled: [n_rays, n_samples, 3+n_feat],
                  ray_diff: [n_rays, n_samples, 4],
                  mask: [n_rays, n_samples, 1]
@@ -98,11 +100,11 @@ class Projector:
             and (query_camera.shape[0] == 1)
         ), "only support batch_size=1 for now"
 
-        train_imgs = train_imgs.squeeze(0)  # [n_views, h, w, 3]
+        train_imgs = train_imgs.squeeze(0)  # [n_views, h, w, 3] # loại bỏ chiều số 0 (batch dimension) nếu nó có size = 1
         train_cameras = train_cameras.squeeze(0)  # [n_views, 34]
         query_camera = query_camera.squeeze(0)  # [34, ]
 
-        train_imgs = train_imgs.permute(0, 3, 1, 2)  # [n_views, 3, h, w]
+        train_imgs = train_imgs.permute(0, 3, 1, 2)  # [n_views, 3, h, w] # chuyển đổi từ (n_views, h, w, 3) sang (n_views, 3, h, w) để phù hợp với định dạng của PyTorch
 
         h, w = train_cameras[0][:2]
 
@@ -122,6 +124,45 @@ class Projector:
         rgb_feat_sampled = torch.cat(
             [rgb_sampled, feat_sampled], dim=-1
         )  # [n_rays, n_samples, n_views, d+3]
+
+        # Apply transient mask to source views if provided (scenario 2)
+        # This masks out features from transient regions in source images
+        if src_transient_masks is not None:
+            # src_transient_masks: [n_views, h*w] where 1.0=static, 0.0=transient
+            # Reshape back to image coordinates
+            h_val = int(h.item()) if hasattr(h, "item") else int(h)
+            w_val = int(w.item()) if hasattr(w, "item") else int(w)
+
+            masks = src_transient_masks
+
+            if masks.ndim == 4:
+                assert masks.shape[0] == 1, f"Unexpected src_transient_masks shape: {masks.shape}"
+                masks = masks.squeeze(0)   # [n_views, H, W]
+
+            if masks.ndim == 3:
+                n_views, mh, mw = masks.shape
+                assert mh == h_val and mw == w_val, \
+                    f"Mask spatial size mismatch: {masks.shape} vs ({h_val}, {w_val})"
+                mask_img = masks
+
+            elif masks.ndim == 2:
+                n_views, hw = masks.shape
+                assert hw == h_val * w_val, \
+                    f"Flattened mask size mismatch: {hw} vs {h_val*w_val}"
+                mask_img = masks.reshape(n_views, h_val, w_val)
+
+            else:
+                raise ValueError(f"Unsupported src_transient_masks shape: {masks.shape}")
+            
+            # Sample mask at same pixel locations as features
+            # Reshape mask_img to [n_views, 1, h, w] for grid_sample
+            mask_img_batch = mask_img.unsqueeze(1)  # [n_views, 1, h, w]
+            mask_sampled = F.grid_sample(mask_img_batch, normalized_pixel_locations, align_corners=True)
+            mask_sampled = mask_sampled.permute(2, 3, 0, 1).squeeze(-1)  # [n_rays, n_samples, n_views]
+            
+            # Apply mask: multiply features by mask (set transient to 0)
+            # mask_sampled: [n_rays, n_samples, n_views] - 1.0 for static, 0.0 for transient
+            rgb_feat_sampled = rgb_feat_sampled * mask_sampled.unsqueeze(-1)  # Broadcast to all channels
 
         # mask
         inbound = self.inbound(pixel_locations, h, w)

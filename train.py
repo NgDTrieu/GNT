@@ -88,6 +88,7 @@ def train(args):
 
     # Create criterion
     criterion = Criterion()
+    # criterion = Criterion(lambda_o=args.lambda_o)
     scalars_to_log = {}
 
     global_step = model.start_step + 1
@@ -114,6 +115,28 @@ def train(args):
             )
 
             featmaps = model.feature_net(ray_batch["src_rgbs"].squeeze(0).permute(0, 3, 1, 2))
+
+            # # Compute visibility mask for transient handling (training only)
+            # if train_data.get("rgb_full") is not None and ray_batch.get("rgb_full") is not None:
+            #     # Encode target image to get transient latent code
+            #     rgb_full = ray_batch["rgb_full"]  # [1, H, W, 3]
+            #     transient_latent = model.transient_encoder(rgb_full)  # [1, 128]
+                
+            #     # Convert selected_inds to (u, v) coordinates and normalize to [-1, 1]
+            #     selected_inds = ray_batch["selected_inds"]  # [N_rand]
+            #     H, W = ray_sampler.H, ray_sampler.W
+            #     u = (selected_inds // W).float()  # row index [0, H-1]
+            #     v = (selected_inds % W).float()   # column index [0, W-1]
+                
+            #     # Normalize to [-1, 1]: first normalize by max, then scale
+            #     uv = torch.stack([v, u], dim=-1).to(device)  # [N_rand, 2]
+            #     uv = 2.0 * uv / torch.tensor([W - 1.0, H - 1.0], dtype=torch.float32, device=device) - 1.0
+                
+            #     # Predict visibility mask
+            #     visibility_mask = model.visibility_mask_mlp(uv, transient_latent)  # [N_rand, 1]
+            #     ray_batch["visibility_mask"] = visibility_mask
+            # else:
+            #     ray_batch["visibility_mask"] = None
 
             ret = render_rays(
                 ray_batch=ray_batch,
@@ -289,10 +312,12 @@ def log_view(
         depth_im = img_HWC2CHW(colorize(depth_pred, cmap_name="jet"))
 
     rgb_im = rgb_im.permute(1, 2, 0).detach().cpu().numpy()
+    rgb_im = (np.clip(rgb_im, 0, 1) * 255).astype(np.uint8)
     filename = os.path.join(out_folder, prefix[:-1] + "_{:03d}.png".format(global_step))
     imageio.imwrite(filename, rgb_im)
     if depth_im is not None:
         depth_im = depth_im.permute(1, 2, 0).detach().cpu().numpy()
+        depth_im = (np.clip(depth_im, 0, 1) * 255).astype(np.uint8)
         filename = os.path.join(out_folder, prefix[:-1] + "depth_{:03d}.png".format(global_step))
         imageio.imwrite(filename, depth_im)
 

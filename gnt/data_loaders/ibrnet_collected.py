@@ -5,10 +5,97 @@ import torch
 from torch.utils.data import Dataset
 import glob
 import sys
+import cv2
 
 sys.path.append("../")
 from .data_utils import rectify_inplane_rotation, random_crop, random_flip, get_nearest_pose_ids
 from .llff_data_utils import load_llff_data, batch_parse_llff_poses
+
+
+def create_random_mask(img_h, img_w, coverage_ratio=0.1):
+    """
+    Create a random geometric mask (rectangle or circle) to simulate transient objects.
+    
+    Args:
+        img_h: image height
+        img_w: image width
+        coverage_ratio: fraction of image to mask (0.05 to 0.20)
+    
+    Returns:
+        mask: binary mask [img_h, img_w] where 1 indicates masked region
+    """
+    mask = np.zeros((img_h, img_w), dtype=np.uint8)
+    
+    # Total pixels to mask
+    total_pixels = img_h * img_w
+    target_pixels = int(total_pixels * coverage_ratio)
+    
+    # Randomly choose between rectangle or circle
+    shape_type = np.random.choice(['rect', 'circle'])
+    
+    if shape_type == 'rect':
+        # Random rectangle
+        max_h = int(np.sqrt(target_pixels * 2))
+        max_w = int(np.sqrt(target_pixels * 2))
+        h = np.random.randint(max(10, max_h // 3), min(img_h, max_h))
+        w = np.random.randint(max(10, max_w // 3), min(img_w, max_w))
+        y = np.random.randint(0, max(1, img_h - h))
+        x = np.random.randint(0, max(1, img_w - w))
+        mask[y:y+h, x:x+w] = 1
+    else:
+        # Random circle
+        radius = int(np.sqrt(target_pixels / np.pi))
+        radius = max(5, min(min(img_h, img_w) // 2, radius))
+        cy = np.random.randint(radius, max(radius+1, img_h - radius))
+        cx = np.random.randint(radius, max(radius+1, img_w - radius))
+        cv2.circle(mask, (cx, cy), radius, 1, -1)
+    
+    return mask
+
+
+def apply_transient_augmentation(img, mask, aug_type='random', return_mask=False):
+    """
+    Apply transient occlusion to an image using the mask.
+    
+    Args:
+        img: input image [H, W, 3] in [0, 1]
+        mask: binary mask [H, W] where 1 = masked region (to be augmented)
+        aug_type: 'noise', 'color', 'blur', or 'random'
+        return_mask: if True, return both augmented image and transient mask (1=static, 0=transient)
+    
+    Returns:
+        augmented_img: image with transient occlusion applied
+        transient_mask (optional): binary mask [H, W] where 1=static, 0=transient (only if return_mask=True)
+    """
+    if aug_type == 'random':
+        aug_type = np.random.choice(['noise', 'color', 'blur'])
+    
+    augmented_img = img.copy()
+    mask_bool = mask.astype(bool)
+    
+    if aug_type == 'noise':
+        # Replace with Gaussian noise
+        noise = np.random.normal(0.5, 0.2, img.shape)
+        noise = np.clip(noise, 0, 1)
+        augmented_img[mask_bool] = noise[mask_bool]
+    
+    elif aug_type == 'color':
+        # Replace with random color
+        random_color = np.random.rand(3)
+        augmented_img[mask_bool] = random_color
+    
+    elif aug_type == 'blur':
+        # Apply Gaussian blur to masked region
+        blurred = cv2.GaussianBlur(img, (21, 21), 0)
+        augmented_img[mask_bool] = blurred[mask_bool]
+    
+    if return_mask:
+        # Return transient mask: 1.0 = static pixels (outside augmented region)
+        #                       0.0 = transient pixels (inside augmented region)
+        transient_mask = (1.0 - mask).astype(np.float32)
+        return augmented_img, transient_mask
+    
+    return augmented_img
 
 
 class IBRNetCollectedDataset(Dataset):
@@ -140,9 +227,33 @@ class IBRNetCollectedDataset(Dataset):
         if self.mode == "train" and np.random.choice([0, 1], p=[0.5, 0.5]):
             rgb, camera, src_rgbs, src_cameras = random_flip(rgb, camera, src_rgbs, src_cameras)
 
+        # Data augmentation: Apply transient object masks to simulate in-the-wild data
+        src_transient_masks = None  # Will store transient masks for source views (scenario 2)
+        
+        # if self.mode == "train" and np.random.choice([0, 1], p=[0.2, 0.8]):
+        if np.random.choice([0, 1], p=[0.2, 0.8]):
+            # Apply transient augmentation to source views
+            # Store masks for each source view (1.0=static, 0.0=transient)
+            src_masks = []
+            for i in range(src_rgbs.shape[0]):
+                coverage = np.random.uniform(0.20, 0.50)  # varies per view
+                mask = create_random_mask(src_rgbs.shape[1], src_rgbs.shape[2], coverage)
+                aug_type = np.random.choice(['noise', 'color', 'blur'])
+                src_rgbs[i], transient_mask = apply_transient_augmentation(
+                    src_rgbs[i], mask, aug_type, return_mask=True
+                )
+                src_masks.append(transient_mask)
+            src_transient_masks = np.stack(src_masks, axis=0)  # [num_src, H, W]
+            
+            # Apply transient augmentation to target view with different mask
+            coverage_target = np.random.uniform(0.20, 0.50)
+            mask_target = create_random_mask(rgb.shape[0], rgb.shape[1], coverage_target)
+            aug_type_target = np.random.choice(['noise', 'color', 'blur'])
+            rgb = apply_transient_augmentation(rgb, mask_target, aug_type_target)
+
         depth_range = torch.tensor([depth_range[0] * 0.9, depth_range[1] * 1.5])
 
-        return {
+        return_dict = {
             "rgb": torch.from_numpy(rgb[..., :3]),
             "camera": torch.from_numpy(camera),
             "rgb_path": rgb_file,
@@ -150,3 +261,9 @@ class IBRNetCollectedDataset(Dataset):
             "src_cameras": torch.from_numpy(src_cameras),
             "depth_range": depth_range,
         }
+        
+        # Add transient masks for source views if available (scenario 2)
+        if src_transient_masks is not None:
+            return_dict["src_transient_masks"] = torch.from_numpy(src_transient_masks)
+        
+        return return_dict

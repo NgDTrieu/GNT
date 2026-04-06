@@ -151,6 +151,19 @@ def config_parser():
         default=50000,
         help="decay learning rate by a factor every specified number of steps",
     )
+    parser.add_argument(
+        "--lambda_o",
+        type=float,
+        default=0.01,
+        help="weight for visibility mask regularization loss (for transient object handling)",
+    )
+
+    parser.add_argument(
+    "--src_transient_masks",
+    action="store_true", 
+    default=False,
+    help="if True, dataset will return transient masks for source views (scenario 2)"
+)
 
     ########## rendering options ##########
     parser.add_argument(
