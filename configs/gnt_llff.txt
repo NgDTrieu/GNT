@@ -5,9 +5,9 @@ render_stride = 2
 distributed = False
 
 ## dataset
-train_dataset = llff_test
+train_dataset = llff
 train_scenes = fern
-eval_dataset = llff_test
+eval_dataset = llff
 eval_scenes = fern
 
 ### TRAINING

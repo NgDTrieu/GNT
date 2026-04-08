@@ -71,7 +71,7 @@ class Attention2D(nn.Module):
         self.out_fc = nn.Linear(dim, dim)
         self.dp = nn.Dropout(dp_rate)
 
-    def forward(self, q, k, pos, mask=None):
+    def forward(self, q, k, pos, mask=None, conf=None):
         q = self.q_fc(q)
         k = self.k_fc(k)
         v = self.v_fc(k)
@@ -81,6 +81,8 @@ class Attention2D(nn.Module):
         attn = self.attn_fc(attn)
         if mask is not None:
             attn = attn.masked_fill(mask == 0, -1e9)
+        if conf is not None:
+            attn = attn + torch.log(conf.clamp(min=1e-6))
         attn = torch.softmax(attn, dim=-2)
         attn = self.dp(attn)
 
@@ -99,10 +101,10 @@ class Transformer2D(nn.Module):
         self.ff = FeedForward(dim, ff_hid_dim, ff_dp_rate)
         self.attn = Attention2D(dim, attn_dp_rate)
 
-    def forward(self, q, k, pos, mask=None):
+    def forward(self, q, k, pos, mask=None, conf=None):
         residue = q
         x = self.attn_norm(q)
-        x = self.attn(x, k, pos, mask)
+        x = self.attn(x, k, pos, mask, conf)
         x = x + residue
 
         residue = x
@@ -267,7 +269,7 @@ class GNT(nn.Module):
             periodic_fns=[torch.sin, torch.cos],
         )
 
-    def forward(self, rgb_feat, ray_diff, mask, pts, ray_d):
+    def forward(self, rgb_feat, ray_diff, mask, pts, ray_d, src_conf=None):
         # compute positional embeddings
         viewdirs = ray_d
         viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
@@ -282,6 +284,10 @@ class GNT(nn.Module):
 
         # project rgb features to netwidth
         rgb_feat = self.rgbfeat_fc(rgb_feat)
+
+        if src_conf is not None:
+            rgb_feat = rgb_feat * src_conf
+
         # q_init -> maxpool
         q = rgb_feat.max(dim=2)[0]
 
@@ -290,7 +296,7 @@ class GNT(nn.Module):
             zip(self.view_crosstrans, self.q_fcs, self.view_selftrans)
         ):
             # view transformer to update q
-            q = crosstrans(q, rgb_feat, ray_diff, mask)
+            q = crosstrans(q, rgb_feat, ray_diff, mask, src_conf)
             # embed positional information
             if i % 2 == 0:
                 q = torch.cat((q, input_pts, input_views), dim=-1)

@@ -18,17 +18,27 @@ class Criterion(nn.Module):
         # self.lambda_o = lambda_o
 
     def forward(self, outputs, ray_batch, scalars_to_log):
-        """
-        training criterion with visibility mask support
-        """
         pred_rgb = outputs["rgb"]  # [N_rays, 3]
-        if "mask" in outputs:
-            pred_mask = outputs["mask"].float()
-        else:
-            pred_mask = None
         gt_rgb = ray_batch["rgb"]  # [N_rays, 3]
 
-        loss = img2mse(pred_rgb, gt_rgb, pred_mask)
+        weight = None
+        if "mask" in outputs and outputs["mask"] is not None:
+            # Ép shape về [N_rays, 1]
+            weight = outputs["mask"].float().view(-1, 1)
+
+        if "target_transient_mask" in ray_batch and ray_batch["target_transient_mask"] is not None:
+            # Ép shape về [N_rays, 1]
+            tgt_w = ray_batch["target_transient_mask"].float().view(-1, 1)
+            weight = tgt_w if weight is None else weight * tgt_w
+
+        if weight is None or torch.sum(weight) < 1e-8:
+            loss = torch.mean((pred_rgb - gt_rgb) ** 2)
+        else:
+            per_ray = torch.mean((pred_rgb - gt_rgb) ** 2, dim=-1, keepdim=True)  # [N_rays, 1]
+            loss = torch.sum(weight * per_ray) / (torch.sum(weight) + 1e-8)
+
+
+        # loss = img2mse(pred_rgb, gt_rgb, pred_mask)
         # # Compute RGB loss using standard MSE
         # rgb_loss = img2mse(pred_rgb, gt_rgb, pred_mask)
 

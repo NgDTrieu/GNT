@@ -234,7 +234,7 @@ def render_rays(
     )
 
     N_rays, N_samples = pts.shape[:2]
-    rgb_feat, ray_diff, mask = projector.compute(
+    rgb_feat, ray_diff, mask, src_conf = projector.compute(
         pts,
         ray_batch["camera"],
         ray_batch["src_rgbs"],
@@ -247,7 +247,7 @@ def render_rays(
     #     mask[..., 0].sum(dim=2) > 1
     # )  # [N_rays, N_samples], should at least have 2 observations
 
-    rgb = model.net_coarse(rgb_feat, ray_diff, mask, pts, ray_d)
+    rgb = model.net_coarse(rgb_feat, ray_diff, mask, pts, ray_d, src_conf=src_conf)
     if ret_alpha:
         rgb, weights = rgb[:, 0:3], rgb[:, 3:]
         depth_map = torch.sum(weights * z_vals, dim=-1)

@@ -17,6 +17,23 @@ from gnt.projection import Projector
 from gnt.data_loaders.create_training_dataset import create_training_dataset
 import imageio
 
+from pathlib import Path
+
+def unwrap_path(x):
+    if isinstance(x, (list, tuple)):
+        return x[0]
+    return x
+
+def parse_scene_image(rgb_path):
+    p = Path(rgb_path)
+    image_name = p.name
+    parent_name = p.parent.name
+    if parent_name.startswith("images") and p.parent.parent != p.parent:
+        scene_name = p.parent.parent.name
+    else:
+        scene_name = parent_name
+    return scene_name, image_name
+
 
 def worker_init_fn(worker_id):
     np.random.seed(np.random.get_state()[1][0] + worker_id)
@@ -169,6 +186,15 @@ def log_view(
     average_im = img_HWC2CHW(average_im)
 
     rgb_coarse = img_HWC2CHW(ret["outputs_coarse"]["rgb"].detach().cpu())
+
+    h_max = max(rgb_gt.shape[-2], rgb_coarse.shape[-2], average_im.shape[-2])
+    w_max = max(rgb_gt.shape[-1], rgb_coarse.shape[-1], average_im.shape[-1])
+
+    rgb_im = torch.zeros(3, h_max, 3 * w_max)
+    rgb_im[:, : average_im.shape[-2], : average_im.shape[-1]] = average_im
+    rgb_im[:, : rgb_gt.shape[-2], w_max : w_max + rgb_gt.shape[-1]] = rgb_gt
+    rgb_im[:, : rgb_coarse.shape[-2], 2 * w_max : 2 * w_max + rgb_coarse.shape[-1]] = rgb_coarse
+
     if "depth" in ret["outputs_coarse"].keys():
         depth_pred = ret["outputs_coarse"]["depth"].detach().cpu()
         depth_coarse = img_HWC2CHW(colorize(depth_pred, cmap_name="jet"))
@@ -184,12 +210,19 @@ def log_view(
         rgb_fine = None
         depth_fine = None
 
-    rgb_coarse = rgb_coarse.permute(1, 2, 0).detach().cpu().numpy()
-    filename = os.path.join(out_folder, prefix[:-1] + "_{:03d}_coarse.png".format(global_step))
-    imageio.imwrite(filename, rgb_coarse)
+    # rgb_coarse = rgb_coarse.permute(1, 2, 0).detach().cpu().numpy()
+    # rgb_coarse = (np.clip(rgb_coarse, 0.0, 1.0) * 255.0).astype(np.uint8) # <--- Sửa ở đây
+    # filename = os.path.join(out_folder, prefix[:-1] + "_{:03d}_coarse.png".format(global_step))
+    # imageio.imwrite(filename, rgb_coarse)
+
+    rgb_im = rgb_im.permute(1, 2, 0).detach().cpu().numpy()
+    rgb_im = (np.clip(rgb_im, 0.0, 1.0) * 255.0).astype(np.uint8)
+    filename = os.path.join(out_folder, prefix[:-1] + "_{:03d}_compare.png".format(global_step))
+    imageio.imwrite(filename, rgb_im)
 
     if depth_coarse is not None:
         depth_coarse = depth_coarse.permute(1, 2, 0).detach().cpu().numpy()
+        depth_coarse = (np.clip(depth_coarse, 0.0, 1.0) * 255.0).astype(np.uint8) # <--- Sửa ở đây
         filename = os.path.join(
             out_folder, prefix[:-1] + "_{:03d}_coarse_depth.png".format(global_step)
         )
@@ -197,11 +230,13 @@ def log_view(
 
     if rgb_fine is not None:
         rgb_fine = rgb_fine.permute(1, 2, 0).detach().cpu().numpy()
+        rgb_fine = (np.clip(rgb_fine, 0.0, 1.0) * 255.0).astype(np.uint8) # <--- Sửa ở đây
         filename = os.path.join(out_folder, prefix[:-1] + "_{:03d}_fine.png".format(global_step))
         imageio.imwrite(filename, rgb_fine)
 
     if depth_fine is not None:
         depth_fine = depth_fine.permute(1, 2, 0).detach().cpu().numpy()
+        depth_fine = (np.clip(depth_fine, 0.0, 1.0) * 255.0).astype(np.uint8) # <--- Sửa ở đây
         filename = os.path.join(
             out_folder, prefix[:-1] + "_{:03d}_fine_depth.png".format(global_step)
         )
@@ -217,12 +252,34 @@ def log_view(
     lpips_curr_img = lpips(pred_rgb, gt_img, format="HWC").item()
     ssim_curr_img = ssim(pred_rgb, gt_img, format="HWC").item()
     psnr_curr_img = img2psnr(pred_rgb.detach().cpu(), gt_img)
-    print(prefix + "psnr_image: ", psnr_curr_img)
-    print(prefix + "lpips_image: ", lpips_curr_img)
-    print(prefix + "ssim_image: ", ssim_curr_img)
+    # print(prefix + "psnr_image: ", psnr_curr_img)
+    # print(prefix + "lpips_image: ", lpips_curr_img)
+    # print(prefix + "ssim_image: ", ssim_curr_img)
+
+    rgb_path = unwrap_path(ray_sampler.rgb_path)
+    scene_name, image_name = parse_scene_image(rgb_path)
+
+    split_name = prefix[:-1] if prefix.endswith("/") else prefix
+
+    coarse_name = f"{split_name}_{global_step:03d}_coarse.png"
+    fine_name = f"{split_name}_{global_step:03d}_fine.png" if rgb_fine is not None else "None"
+
+    num_src = 0
+    if ray_sampler.src_rgbs is not None:
+        num_src = ray_sampler.src_rgbs.shape[1]
+
+    has_src_mask = getattr(ray_sampler, "src_transient_masks", None) is not None
+
+    print(
+        f"[{split_name.upper()} {global_step:03d}] "
+        f"scene={scene_name} | image={image_name} | "
+        f"n_src={num_src} | src_mask={has_src_mask} | "
+        f"PSNR={psnr_curr_img:.4f} | LPIPS={lpips_curr_img:.4f} | SSIM={ssim_curr_img:.4f} | "
+        f"coarse={coarse_name} | fine={fine_name}"
+    )
+    print(f"  path={rgb_path}")
+
     return psnr_curr_img, lpips_curr_img, ssim_curr_img
-
-
 if __name__ == "__main__":
     parser = config.config_parser()
     parser.add_argument("--run_val", action="store_true", help="run on val set")

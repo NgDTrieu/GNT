@@ -229,14 +229,15 @@ class IBRNetCollectedDataset(Dataset):
 
         # Data augmentation: Apply transient object masks to simulate in-the-wild data
         src_transient_masks = None  # Will store transient masks for source views (scenario 2)
+        target_transient_mask = None  # Will store transient mask for target view 
         
         # if self.mode == "train" and np.random.choice([0, 1], p=[0.2, 0.8]):
-        if np.random.choice([0, 1], p=[0.2, 0.8]):
+        if np.random.choice([0, 1], p=[0.4, 0.6]):
             # Apply transient augmentation to source views
             # Store masks for each source view (1.0=static, 0.0=transient)
             src_masks = []
             for i in range(src_rgbs.shape[0]):
-                coverage = np.random.uniform(0.20, 0.50)  # varies per view
+                coverage = np.random.uniform(0.10, 0.30)  # varies per view
                 mask = create_random_mask(src_rgbs.shape[1], src_rgbs.shape[2], coverage)
                 aug_type = np.random.choice(['noise', 'color', 'blur'])
                 src_rgbs[i], transient_mask = apply_transient_augmentation(
@@ -246,10 +247,10 @@ class IBRNetCollectedDataset(Dataset):
             src_transient_masks = np.stack(src_masks, axis=0)  # [num_src, H, W]
             
             # Apply transient augmentation to target view with different mask
-            coverage_target = np.random.uniform(0.20, 0.50)
+            coverage_target = np.random.uniform(0.10, 0.30)
             mask_target = create_random_mask(rgb.shape[0], rgb.shape[1], coverage_target)
             aug_type_target = np.random.choice(['noise', 'color', 'blur'])
-            rgb = apply_transient_augmentation(rgb, mask_target, aug_type_target)
+            rgb, target_transient_mask = apply_transient_augmentation(rgb, mask_target, aug_type_target, return_mask=True)
 
         depth_range = torch.tensor([depth_range[0] * 0.9, depth_range[1] * 1.5])
 
@@ -261,6 +262,9 @@ class IBRNetCollectedDataset(Dataset):
             "src_cameras": torch.from_numpy(src_cameras),
             "depth_range": depth_range,
         }
+
+        if target_transient_mask is not None:
+            return_dict["target_transient_mask"] = torch.from_numpy(target_transient_mask)
         
         # Add transient masks for source views if available (scenario 2)
         if src_transient_masks is not None:

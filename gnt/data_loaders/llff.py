@@ -9,6 +9,59 @@ sys.path.append("../")
 from .data_utils import random_crop, random_flip, get_nearest_pose_ids
 from .llff_data_utils import load_llff_data, batch_parse_llff_poses
 
+import cv2
+
+def create_random_mask(img_h, img_w, coverage_ratio=0.1):
+    mask = np.zeros((img_h, img_w), dtype=np.uint8)
+    total_pixels = img_h * img_w
+    target_pixels = int(total_pixels * coverage_ratio)
+
+    shape_type = np.random.choice(['rect', 'circle'])
+
+    if shape_type == 'rect':
+        max_h = int(np.sqrt(target_pixels * 2))
+        max_w = int(np.sqrt(target_pixels * 2))
+        h = np.random.randint(max(10, max_h // 3), min(img_h, max_h))
+        w = np.random.randint(max(10, max_w // 3), min(img_w, max_w))
+        y = np.random.randint(0, max(1, img_h - h))
+        x = np.random.randint(0, max(1, img_w - w))
+        mask[y:y+h, x:x+w] = 1
+    else:
+        radius = int(np.sqrt(target_pixels / np.pi))
+        radius = max(5, min(min(img_h, img_w) // 2, radius))
+        cy = np.random.randint(radius, max(radius + 1, img_h - radius))
+        cx = np.random.randint(radius, max(radius + 1, img_w - radius))
+        cv2.circle(mask, (cx, cy), radius, 1, -1)
+
+    return mask
+
+
+def apply_transient_augmentation(img, mask, aug_type='random', return_mask=False):
+    if aug_type == 'random':
+        aug_type = np.random.choice(['noise', 'color', 'blur'])
+
+    augmented_img = img.copy()
+    mask_bool = mask.astype(bool)
+
+    if aug_type == 'noise':
+        noise = np.random.normal(0.5, 0.2, img.shape)
+        noise = np.clip(noise, 0, 1)
+        augmented_img[mask_bool] = noise[mask_bool]
+
+    elif aug_type == 'color':
+        random_color = np.random.rand(3)
+        augmented_img[mask_bool] = random_color
+
+    elif aug_type == 'blur':
+        blurred = cv2.GaussianBlur(img, (21, 21), 0)
+        augmented_img[mask_bool] = blurred[mask_bool]
+
+    if return_mask:
+        transient_mask = (1.0 - mask).astype(np.float32)  # 1=static, 0=transient
+        return augmented_img, transient_mask
+
+    return augmented_img
+
 
 class LLFFDataset(Dataset):
     def __init__(self, args, mode, **kwargs):
@@ -132,9 +185,25 @@ class LLFFDataset(Dataset):
         if self.mode == "train" and np.random.choice([0, 1]):
             rgb, camera, src_rgbs, src_cameras = random_flip(rgb, camera, src_rgbs, src_cameras)
 
+        src_transient_masks = None
+
+        # áp transient giả cho source views khi eval/infer
+        if self.mode != "train":
+            src_masks = []
+            for i in range(src_rgbs.shape[0]):
+                coverage = np.random.uniform(0.10, 0.30)
+                mask = create_random_mask(src_rgbs.shape[1], src_rgbs.shape[2], coverage)
+                aug_type = np.random.choice(['noise', 'color', 'blur'])
+                src_rgbs[i], transient_mask = apply_transient_augmentation(
+                    src_rgbs[i], mask, aug_type, return_mask=True
+                )
+                src_masks.append(transient_mask)
+
+            src_transient_masks = np.stack(src_masks, axis=0)  # [num_src, H, W]
+
         depth_range = torch.tensor([depth_range[0] * 0.9, depth_range[1] * 1.6])
 
-        return {
+        return_dict = {
             "rgb": torch.from_numpy(rgb[..., :3]),
             "camera": torch.from_numpy(camera),
             "rgb_path": rgb_file,
@@ -142,3 +211,8 @@ class LLFFDataset(Dataset):
             "src_cameras": torch.from_numpy(src_cameras),
             "depth_range": depth_range,
         }
+
+        if src_transient_masks is not None:
+            return_dict["src_transient_masks"] = torch.from_numpy(src_transient_masks)
+
+        return return_dict

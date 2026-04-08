@@ -127,6 +127,7 @@ class Projector:
 
         # Apply transient mask to source views if provided (scenario 2)
         # This masks out features from transient regions in source images
+        src_conf = None
         if src_transient_masks is not None:
             # src_transient_masks: [n_views, h*w] where 1.0=static, 0.0=transient
             # Reshape back to image coordinates
@@ -163,6 +164,7 @@ class Projector:
             # Apply mask: multiply features by mask (set transient to 0)
             # mask_sampled: [n_rays, n_samples, n_views] - 1.0 for static, 0.0 for transient
             rgb_feat_sampled = rgb_feat_sampled * mask_sampled.unsqueeze(-1)  # Broadcast to all channels
+            src_conf = mask_sampled.unsqueeze(-1)  # [n_rays, n_samples, n_views, 1] confidence of source view features based on transient mask
 
         # mask
         inbound = self.inbound(pixel_locations, h, w)
@@ -171,4 +173,4 @@ class Projector:
         mask = (
             (inbound * mask_in_front).float().permute(1, 2, 0)[..., None]
         )  # [n_rays, n_samples, n_views, 1]
-        return rgb_feat_sampled, ray_diff, mask
+        return rgb_feat_sampled, ray_diff, mask, src_conf

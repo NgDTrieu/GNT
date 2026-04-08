@@ -68,19 +68,6 @@ class RaySamplerSingleImage(object):
             self.src_cameras = data["src_cameras"]
         else:
             self.src_cameras = None
-        
-        # # Support for transient masks (scenario 2)
-        # if "src_transient_masks" in data.keys():
-        #     self.src_transient_masks = data["src_transient_masks"]
-        # else:
-        #     self.src_transient_masks = None
-
-        # if "src_transient_masks" in data.keys():
-        #     self.src_transient_masks = data["src_transient_masks"]
-        #     if self.src_transient_masks.ndim == 4 and self.src_transient_masks.shape[0] == 1:
-        #         self.src_transient_masks = self.src_transient_masks.squeeze(0)
-        # else:
-        #     self.src_transient_masks = None
 
         if "src_transient_masks" in data.keys():
             self.src_transient_masks = data["src_transient_masks"]
@@ -92,6 +79,14 @@ class RaySamplerSingleImage(object):
                 self.src_transient_masks = self.src_transient_masks.squeeze(0)  # -> [n_views, H, W]
         else:
             self.src_transient_masks = None
+
+        if "target_transient_mask" in data.keys():
+            self.target_transient_mask = data["target_transient_mask"]
+            if self.target_transient_mask.ndim == 3 and self.target_transient_mask.shape[0] == 1:
+                self.target_transient_mask = self.target_transient_mask.squeeze(0)   # [H, W]
+                self.target_transient_mask = self.target_transient_mask.reshape(-1)  # Flatten to [H*W]
+        else:
+            self.target_transient_mask = None
 
     def get_rays_single_image(self, H, W, intrinsics, c2w):
         """
@@ -127,6 +122,12 @@ class RaySamplerSingleImage(object):
             n_views, H, W = masks.shape
             src_transient_masks = masks.reshape(n_views, H * W)
 
+        target_transient_mask = None
+        if self.target_transient_mask is not None:
+            target_transient_mask = self.target_transient_mask
+        else:
+            target_transient_mask = None
+    
         ret = {
             "ray_o": self.rays_o.cuda(),
             "ray_d": self.rays_d.cuda(),
@@ -137,6 +138,7 @@ class RaySamplerSingleImage(object):
             "src_rgbs": self.src_rgbs.cuda() if self.src_rgbs is not None else None,
             "src_cameras": self.src_cameras.cuda() if self.src_cameras is not None else None,
             "src_transient_masks": src_transient_masks.cuda() if src_transient_masks is not None else None,
+            "target_transient_mask": target_transient_mask.cuda() if target_transient_mask is not None else None,
         }
         return ret
 
@@ -179,29 +181,20 @@ class RaySamplerSingleImage(object):
         else:
             rgb = None
         
-        # # Flatten transient masks if available (scenario 2) - lỗi
-        # src_transient_masks = None
-        # if self.src_transient_masks is not None:
-        #     # src_transient_masks shape: [num_src, H, W]
-        #     # Flatten to [num_src, H*W] for consistency
-        #     num_src = self.src_transient_masks.shape[0]
-        #     H, W = self.src_transient_masks.shape[1], self.src_transient_masks.shape[2]
-        #     src_transient_masks = self.src_transient_masks.reshape(num_src, -1)
 
         # Flatten transient masks if available (scenario 2)
         src_transient_masks = None
         if self.src_transient_masks is not None:
             masks = self.src_transient_masks
 
-            # # DataLoader adds batch dim: [1, num_src, H, W]
-            # if masks.ndim == 4:
-            #     assert masks.shape[0] == 1, f"Unexpected batch size for src_transient_masks: {masks.shape}"
-            #     masks = masks.squeeze(0)   # -> [num_src, H, W]
-
-            # assert masks.ndim == 3, f"Expected [num_src, H, W], got {masks.shape}"
-
             num_src, H, W = masks.shape
             src_transient_masks = masks.reshape(num_src, H * W)
+
+        target_transient_mask = None
+        if self.target_transient_mask is not None:
+            target_transient_mask = self.target_transient_mask[select_inds]
+        else:
+            target_transient_mask = None
 
         ret = {
             "ray_o": rays_o.cuda(),
@@ -218,5 +211,8 @@ class RaySamplerSingleImage(object):
         # Add transient masks for source views if available (scenario 2)
         if src_transient_masks is not None:
             ret["src_transient_masks"] = src_transient_masks.cuda()
+
+        if target_transient_mask is not None:
+            ret["target_transient_mask"] = target_transient_mask.cuda()
         
         return ret
