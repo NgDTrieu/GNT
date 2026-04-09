@@ -231,8 +231,8 @@ class IBRNetCollectedDataset(Dataset):
         src_transient_masks = None  # Will store transient masks for source views (scenario 2)
         target_transient_mask = None  # Will store transient mask for target view 
         
-        # if self.mode == "train" and np.random.choice([0, 1], p=[0.2, 0.8]):
-        if np.random.choice([0, 1], p=[0.4, 0.6]):
+        if self.mode == "train" and np.random.choice([0, 1], p=[0.4, 0.6]):
+        # if np.random.choice([0, 1], p=[0.4, 0.6]):
             # Apply transient augmentation to source views
             # Store masks for each source view (1.0=static, 0.0=transient)
             src_masks = []

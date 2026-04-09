@@ -1,4 +1,5 @@
 import os
+import hashlib
 import numpy as np
 import imageio
 import torch
@@ -11,45 +12,66 @@ from .llff_data_utils import load_llff_data, batch_parse_llff_poses
 
 import cv2
 
-def create_random_mask(img_h, img_w, coverage_ratio=0.1):
+def create_random_mask(img_h, img_w, coverage_ratio=0.1, rng=None):
+    if rng is None:
+        rng = np.random.RandomState(0)
+
     mask = np.zeros((img_h, img_w), dtype=np.uint8)
     total_pixels = img_h * img_w
     target_pixels = int(total_pixels * coverage_ratio)
 
-    shape_type = np.random.choice(['rect', 'circle'])
+    shape_type = rng.choice(['rect', 'circle'])
 
     if shape_type == 'rect':
         max_h = int(np.sqrt(target_pixels * 2))
         max_w = int(np.sqrt(target_pixels * 2))
-        h = np.random.randint(max(10, max_h // 3), min(img_h, max_h))
-        w = np.random.randint(max(10, max_w // 3), min(img_w, max_w))
-        y = np.random.randint(0, max(1, img_h - h))
-        x = np.random.randint(0, max(1, img_w - w))
-        mask[y:y+h, x:x+w] = 1
+
+        h_low = max(10, max_h // 3)
+        h_high = min(img_h, max_h)
+        w_low = max(10, max_w // 3)
+        w_high = min(img_w, max_w)
+
+        h_high = max(h_low + 1, h_high)
+        w_high = max(w_low + 1, w_high)
+
+        h = rng.randint(h_low, h_high)
+        w = rng.randint(w_low, w_high)
+        y = rng.randint(0, max(1, img_h - h + 1))
+        x = rng.randint(0, max(1, img_w - w + 1))
+        mask[y:y + h, x:x + w] = 1
     else:
         radius = int(np.sqrt(target_pixels / np.pi))
         radius = max(5, min(min(img_h, img_w) // 2, radius))
-        cy = np.random.randint(radius, max(radius + 1, img_h - radius))
-        cx = np.random.randint(radius, max(radius + 1, img_w - radius))
+
+        cy_low = radius
+        cy_high = max(radius + 1, img_h - radius + 1)
+        cx_low = radius
+        cx_high = max(radius + 1, img_w - radius + 1)
+
+        cy = rng.randint(cy_low, cy_high)
+        cx = rng.randint(cx_low, cx_high)
         cv2.circle(mask, (cx, cy), radius, 1, -1)
 
     return mask
 
 
-def apply_transient_augmentation(img, mask, aug_type='random', return_mask=False):
+def apply_transient_augmentation(img, mask, aug_type='random', return_mask=False, rng=None):
+    if rng is None:
+        rng = np.random.RandomState(0)
+
     if aug_type == 'random':
-        aug_type = np.random.choice(['noise', 'color', 'blur'])
+        aug_type = rng.choice(['noise', 'color', 'blur'])
 
     augmented_img = img.copy()
     mask_bool = mask.astype(bool)
 
     if aug_type == 'noise':
-        noise = np.random.normal(0.5, 0.2, img.shape)
+        noise = rng.normal(0.5, 0.2, img.shape)
         noise = np.clip(noise, 0, 1)
         augmented_img[mask_bool] = noise[mask_bool]
 
     elif aug_type == 'color':
-        random_color = np.random.rand(3)
+        random_color = rng.rand(3)
         augmented_img[mask_bool] = random_color
 
     elif aug_type == 'blur':
@@ -62,6 +84,16 @@ def apply_transient_augmentation(img, mask, aug_type='random', return_mask=False
 
     return augmented_img
 
+def stable_int_hash(text):
+    return int(hashlib.md5(text.encode("utf-8")).hexdigest()[:8], 16)
+
+
+def make_rng(base_seed, *keys):
+    seed = int(base_seed)
+    for key in keys:
+        seed = (seed * 1000003 + stable_int_hash(str(key))) % (2**32 - 1)
+    return np.random.RandomState(seed)
+
 
 class LLFFDataset(Dataset):
     def __init__(self, args, mode, **kwargs):
@@ -69,6 +101,7 @@ class LLFFDataset(Dataset):
         self.args = args
         self.mode = mode  # train / test / validation
         self.num_source_views = args.num_source_views
+        self.eval_seed = getattr(args, "eval_seed", 20260408)
         self.render_rgb_files = []
         self.render_intrinsics = []
         self.render_poses = []
@@ -123,6 +156,10 @@ class LLFFDataset(Dataset):
         intrinsics = self.render_intrinsics[idx]
         depth_range = self.render_depth_range[idx]
 
+        sample_rng = None
+        if self.mode != "train":
+            sample_rng = make_rng(self.eval_seed, "target", rgb_file)
+
         train_set_id = self.render_train_set_ids[idx]
         train_rgb_files = self.train_rgb_files[train_set_id]
         train_poses = self.train_poses[train_set_id]
@@ -149,9 +186,16 @@ class LLFFDataset(Dataset):
             tar_id=id_render,
             angular_dist_method="dist",
         )
-        nearest_pose_ids = np.random.choice(
-            nearest_pose_ids, min(num_select, len(nearest_pose_ids)), replace=False
-        )
+
+        num_select_eff = min(num_select, len(nearest_pose_ids))
+        if self.mode == "train":
+            nearest_pose_ids = np.random.choice(
+                nearest_pose_ids, num_select_eff, replace=False
+            )
+        else:
+            nearest_pose_ids = sample_rng.choice(
+                nearest_pose_ids, num_select_eff, replace=False
+            )
 
         assert id_render not in nearest_pose_ids
         # occasionally include input image
@@ -190,16 +234,29 @@ class LLFFDataset(Dataset):
         # áp transient giả cho source views khi eval/infer
         if self.mode != "train":
             src_masks = []
-            for i in range(src_rgbs.shape[0]):
-                coverage = np.random.uniform(0.10, 0.30)
-                mask = create_random_mask(src_rgbs.shape[1], src_rgbs.shape[2], coverage)
-                aug_type = np.random.choice(['noise', 'color', 'blur'])
+            for i, src_id in enumerate(nearest_pose_ids):
+                src_rgb_file = train_rgb_files[src_id]
+                src_rng = make_rng(self.eval_seed, "target", rgb_file, "source", src_rgb_file)
+
+                coverage = src_rng.uniform(0.10, 0.30)
+                mask = create_random_mask(
+                    src_rgbs.shape[1],
+                    src_rgbs.shape[2],
+                    coverage_ratio=coverage,
+                    rng=src_rng,
+                )
+                aug_type = src_rng.choice(['noise', 'color', 'blur'])
+
                 src_rgbs[i], transient_mask = apply_transient_augmentation(
-                    src_rgbs[i], mask, aug_type, return_mask=True
+                    src_rgbs[i],
+                    mask,
+                    aug_type=aug_type,
+                    return_mask=True,
+                    rng=src_rng,
                 )
                 src_masks.append(transient_mask)
 
-            src_transient_masks = np.stack(src_masks, axis=0)  # [num_src, H, W]
+            src_transient_masks = np.stack(src_masks, axis=0).astype(np.float32)  # [num_src, H, W]
 
         depth_range = torch.tensor([depth_range[0] * 0.9, depth_range[1] * 1.6])
 

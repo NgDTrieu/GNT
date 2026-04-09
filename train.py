@@ -19,6 +19,21 @@ import torch.distributed as dist
 from gnt.projection import Projector
 from gnt.data_loaders.create_training_dataset import create_training_dataset
 import imageio
+import sys
+
+class Logger(object):
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, "a", encoding="utf-8")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush() # Đảm bảo data được ghi thẳng xuống ổ cứng ngay lập tức
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
 
 
 def worker_init_fn(worker_id):
@@ -46,6 +61,11 @@ def train(args):
     out_folder = os.path.join(args.rootdir, "out", args.expname)
     print("outputs will be saved to {}".format(out_folder))
     os.makedirs(out_folder, exist_ok=True)
+
+    if args.local_rank == 0:
+        log_file_path = os.path.join(out_folder, "training_log.txt")
+        sys.stdout = Logger(log_file_path)
+        print("Tất cả log từ terminal sẽ được lưu thêm vào:", log_file_path)
 
     # save the args and config files
     f = os.path.join(out_folder, "args.txt")

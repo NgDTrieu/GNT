@@ -34,6 +34,11 @@ def parse_scene_image(rgb_path):
         scene_name = parent_name
     return scene_name, image_name
 
+def log_message(msg, log_file=None):
+    print(msg)
+    if log_file is not None:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
 
 def worker_init_fn(worker_id):
     np.random.seed(np.random.get_state()[1][0] + worker_id)
@@ -59,8 +64,14 @@ def eval(args):
 
     device = "cuda:{}".format(args.local_rank)
     out_folder = os.path.join(args.rootdir, "out", args.expname)
-    print("outputs will be saved to {}".format(out_folder))
     os.makedirs(out_folder, exist_ok=True)
+
+    log_file = os.path.join(out_folder, "eval_log.txt")
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write("===== Evaluation Log =====\n")
+
+    log_message("outputs will be saved to {}".format(out_folder), log_file)
+    log_message("log file: {}".format(log_file), log_file)
 
     # save the args and config files
     f = os.path.join(out_folder, "args.txt")
@@ -127,6 +138,7 @@ def eval(args):
                 out_folder=out_folder,
                 ret_alpha=args.N_importance > 0,
                 single_net=args.single_net,
+                log_file= log_file,
             )
             psnr_scores.append(psnr_curr_img)
             lpips_scores.append(lpips_curr_img)
@@ -151,6 +163,7 @@ def log_view(
     out_folder="",
     ret_alpha=False,
     single_net=True,
+    log_file=None,
 ):
     model.switch_to_eval()
     with torch.no_grad():
@@ -256,6 +269,10 @@ def log_view(
     # print(prefix + "lpips_image: ", lpips_curr_img)
     # print(prefix + "ssim_image: ", ssim_curr_img)
 
+    # log_message("Average PSNR: {}".format(np.mean(psnr_scores)), log_file)
+    # log_message("Average LPIPS: {}".format(np.mean(lpips_scores)), log_file)
+    # log_message("Average SSIM: {}".format(np.mean(ssim_scores)), log_file)
+
     rgb_path = unwrap_path(ray_sampler.rgb_path)
     scene_name, image_name = parse_scene_image(rgb_path)
 
@@ -270,14 +287,15 @@ def log_view(
 
     has_src_mask = getattr(ray_sampler, "src_transient_masks", None) is not None
 
-    print(
+    log_message(
         f"[{split_name.upper()} {global_step:03d}] "
         f"scene={scene_name} | image={image_name} | "
         f"n_src={num_src} | src_mask={has_src_mask} | "
         f"PSNR={psnr_curr_img:.4f} | LPIPS={lpips_curr_img:.4f} | SSIM={ssim_curr_img:.4f} | "
-        f"coarse={coarse_name} | fine={fine_name}"
+        f"coarse={coarse_name} | fine={fine_name}",
+        log_file,
     )
-    print(f"  path={rgb_path}")
+    log_message(f"  path={rgb_path}", log_file)
 
     return psnr_curr_img, lpips_curr_img, ssim_curr_img
 if __name__ == "__main__":

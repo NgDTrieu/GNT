@@ -163,7 +163,7 @@ class Projector:
             
             # Apply mask: multiply features by mask (set transient to 0)
             # mask_sampled: [n_rays, n_samples, n_views] - 1.0 for static, 0.0 for transient
-            rgb_feat_sampled = rgb_feat_sampled * mask_sampled.unsqueeze(-1)  # Broadcast to all channels
+            # rgb_feat_sampled = rgb_feat_sampled * mask_sampled.unsqueeze(-1)  # Broadcast to all channels
             src_conf = mask_sampled.unsqueeze(-1)  # [n_rays, n_samples, n_views, 1] confidence of source view features based on transient mask
 
         # mask

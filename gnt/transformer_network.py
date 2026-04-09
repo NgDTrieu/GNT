@@ -285,8 +285,8 @@ class GNT(nn.Module):
         # project rgb features to netwidth
         rgb_feat = self.rgbfeat_fc(rgb_feat)
 
-        if src_conf is not None:
-            rgb_feat = rgb_feat * src_conf
+        # if src_conf is not None:
+        #     rgb_feat = rgb_feat * src_conf
 
         # q_init -> maxpool
         q = rgb_feat.max(dim=2)[0]

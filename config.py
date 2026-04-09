@@ -206,5 +206,7 @@ def config_parser():
         default=8,
         help="will take every 1/N images as LLFF test set, paper uses 8",
     )
+    parser.add_argument("--eval_seed", type=int, default=20260408,
+                    help="fixed seed for deterministic eval corruption/source selection")
 
     return parser
